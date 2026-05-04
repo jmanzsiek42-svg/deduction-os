@@ -1,119 +1,96 @@
 "use client";
 
+import { supabase } from "@/lib/supabaseClient";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-
-type DisputeStatus =
-  | "Draft"
-  | "Submitted"
-  | "Waiting on Distributor"
-  | "Resolved"
-  | "Rejected";
-type DisputeOutcome = "Pending" | "Recovered" | "Partial Recovery" | "Written Off";
 
 type DisputeEntry = {
   id: string;
   distributor: string;
   retailer: string;
   totalAmount: number;
-  status: DisputeStatus;
+  status: string;
   createdDate: string;
   sentDate: string;
   recoveredAmount: number;
-  outcome: DisputeOutcome;
+  outcome: string;
 };
 
-const baseDisputes: DisputeEntry[] = [
-  {
-    id: "DSP-2401",
-    distributor: "UNFI",
-    retailer: "Whole Foods",
-    totalAmount: 2845.5,
-    status: "Waiting on Distributor",
-    createdDate: "2026-04-19",
-    sentDate: "2026-04-20",
-    recoveredAmount: 0,
-    outcome: "Pending",
-  },
-  {
-    id: "DSP-2402",
-    distributor: "KeHE",
-    retailer: "Target",
-    totalAmount: 915.22,
-    status: "Submitted",
-    createdDate: "2026-04-21",
-    sentDate: "2026-04-22",
-    recoveredAmount: 0,
-    outcome: "Pending",
-  },
-  {
-    id: "DSP-2403",
-    distributor: "Amazon",
-    retailer: "Kroger",
-    totalAmount: 3460.8,
-    status: "Resolved",
-    createdDate: "2026-04-17",
-    sentDate: "2026-04-18",
-    recoveredAmount: 3460.8,
-    outcome: "Recovered",
-  },
-  {
-    id: "DSP-2404",
-    distributor: "Faire",
-    retailer: "Sprouts",
-    totalAmount: 640.14,
-    status: "Rejected",
-    createdDate: "2026-04-14",
-    sentDate: "2026-04-15",
-    recoveredAmount: 0,
-    outcome: "Written Off",
-  },
-  {
-    id: "DSP-2405",
-    distributor: "UNFI",
-    retailer: "Publix",
-    totalAmount: 1735.33,
-    status: "Resolved",
-    createdDate: "2026-04-16",
-    sentDate: "2026-04-17",
-    recoveredAmount: 900.0,
-    outcome: "Partial Recovery",
-  },
-];
+function mapDisputeRow(item: Record<string, unknown>): DisputeEntry {
+  const createdRaw = item.created_at ?? item.created_date ?? item.createdDate;
+  const sentRaw = item.sent_at ?? item.sent_date ?? item.sentDate;
+  return {
+    id: String(item.id ?? ""),
+    distributor: String(item.distributor ?? ""),
+    retailer: String(item.retailer ?? ""),
+    totalAmount: Number(item.total_amount ?? item.totalAmount ?? 0),
+    status: String(item.status ?? ""),
+    createdDate: formatDateOnly(createdRaw),
+    sentDate: formatDateOnly(sentRaw),
+    recoveredAmount: Number(item.recovered_amount ?? item.recoveredAmount ?? 0),
+    outcome: String(item.outcome ?? "Pending"),
+  };
+}
 
-export default function DisputesPage() {
+function isOpenDisputeRow(item: DisputeEntry): boolean {
+  const s = item.status.trim().toLowerCase();
+  if (!s) {
+    return false;
+  }
+  return !["resolved", "rejected", "closed", "written off", "written_off"].includes(s);
+}
+
+function formatDateOnly(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  const s = String(value);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    return s.slice(0, 10);
+  }
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) {
+    return s;
+  }
+  return d.toISOString().slice(0, 10);
+}
+
+function DisputesPageInner() {
   const searchParams = useSearchParams();
-  const [disputes, setDisputes] = useState<DisputeEntry[]>(baseDisputes);
-  const [appliedCreate, setAppliedCreate] = useState(false);
+  const [disputes, setDisputes] = useState<DisputeEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [statusFilter, setStatusFilter] = useState("All");
   const [distributorFilter, setDistributorFilter] = useState("All");
   const [retailerFilter, setRetailerFilter] = useState("All");
 
-  useEffect(() => {
-    if (searchParams.get("created") !== "1" || appliedCreate) {
+  const loadDisputes = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
+    const { data, error } = await supabase.from("disputes").select("*").order("id", {
+      ascending: false,
+    });
+
+    if (error) {
+      setDisputes([]);
+      setLoadError(true);
+      setLoading(false);
       return;
     }
 
-    const distributor = searchParams.get("distributor") ?? "Unknown Distributor";
-    const totalRaw = Number(searchParams.get("total") ?? "0");
-    const createdDate = new Date().toISOString().slice(0, 10);
+    setDisputes((data ?? []).map((row) => mapDisputeRow(row as Record<string, unknown>)));
+    setLoading(false);
+  }, []);
 
-    const newEntry: DisputeEntry = {
-      id: `DSP-${Date.now().toString().slice(-4)}`,
-      distributor,
-      retailer: "Mixed",
-      totalAmount: totalRaw,
-      status: "Submitted",
-      createdDate,
-      sentDate: createdDate,
-      recoveredAmount: 0,
-      outcome: "Pending",
-    };
+  useEffect(() => {
+    void loadDisputes();
+  }, [loadDisputes]);
 
-    setDisputes((current) => [newEntry, ...current]);
-    setAppliedCreate(true);
-  }, [appliedCreate, searchParams]);
+  const statusOptions = useMemo(() => {
+    const fromData = Array.from(new Set(disputes.map((d) => d.status).filter(Boolean))).sort();
+    return ["All", ...fromData];
+  }, [disputes]);
 
   const distributors = useMemo(
     () => ["All", ...Array.from(new Set(disputes.map((item) => item.distributor))).sort()],
@@ -139,9 +116,7 @@ export default function DisputesPage() {
     });
   }, [disputes, distributorFilter, retailerFilter, statusFilter]);
 
-  const openDisputes = disputes.filter((item) =>
-    ["Draft", "Submitted", "Waiting on Distributor"].includes(item.status),
-  ).length;
+  const openDisputes = disputes.filter(isOpenDisputeRow).length;
   const waitingOnDistributor = disputes.filter(
     (item) => item.status === "Waiting on Distributor",
   ).length;
@@ -174,6 +149,12 @@ export default function DisputesPage() {
           </p>
         ) : null}
 
+        {loadError ? (
+          <p className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+            Error loading disputes from Supabase.
+          </p>
+        ) : null}
+
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <SummaryCard label="Open Disputes" value={String(openDisputes)} />
           <SummaryCard
@@ -196,14 +177,7 @@ export default function DisputesPage() {
               label="Status"
               value={statusFilter}
               onChange={setStatusFilter}
-              options={[
-                "All",
-                "Draft",
-                "Submitted",
-                "Waiting on Distributor",
-                "Resolved",
-                "Rejected",
-              ]}
+              options={statusOptions.length > 1 ? statusOptions : ["All"]}
             />
             <FilterSelect
               label="Distributor"
@@ -238,43 +212,58 @@ export default function DisputesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredDisputes.map((item) => (
-                  <tr key={item.id}>
-                    <td className="px-4 py-3 font-medium text-slate-800">{item.id}</td>
-                    <td className="px-4 py-3">{item.distributor}</td>
-                    <td className="px-4 py-3">{item.retailer}</td>
-                    <td className="px-4 py-3">{formatCurrency(item.totalAmount)}</td>
-                    <td className="px-4 py-3">
-                      <span className={`rounded-full px-2 py-1 text-xs font-medium ${statusBadge(item.status)}`}>
-                        {item.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">{item.createdDate}</td>
-                    <td className="px-4 py-3">{item.sentDate}</td>
-                    <td className="px-4 py-3">{formatCurrency(item.recoveredAmount)}</td>
-                    <td className="px-4 py-3">{item.outcome}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                        >
-                          View
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                        >
-                          Update Status
-                        </button>
-                      </div>
+                {loading ? (
+                  <tr>
+                    <td colSpan={10} className="px-4 py-8 text-center text-sm text-slate-500">
+                      Loading…
                     </td>
                   </tr>
-                ))}
+                ) : null}
+                {!loading &&
+                  filteredDisputes.map((item) => (
+                    <tr key={item.id}>
+                      <td className="px-4 py-3 font-medium text-slate-800">{item.id}</td>
+                      <td className="px-4 py-3">{item.distributor}</td>
+                      <td className="px-4 py-3">{item.retailer}</td>
+                      <td className="px-4 py-3">{formatCurrency(item.totalAmount)}</td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`rounded-full px-2 py-1 text-xs font-medium ${statusBadge(item.status)}`}
+                        >
+                          {item.status || "—"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">{item.createdDate || "—"}</td>
+                      <td className="px-4 py-3">{item.sentDate || "—"}</td>
+                      <td className="px-4 py-3">{formatCurrency(item.recoveredAmount)}</td>
+                      <td className="px-4 py-3">{item.outcome}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Update Status
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
               </tbody>
             </table>
           </div>
-          {filteredDisputes.length === 0 ? (
+          {!loading && !loadError && disputes.length === 0 ? (
+            <p className="border-t border-slate-200 px-4 py-5 text-sm text-slate-500">
+              No disputes yet.
+            </p>
+          ) : null}
+          {!loading && disputes.length > 0 && filteredDisputes.length === 0 ? (
             <p className="border-t border-slate-200 px-4 py-5 text-sm text-slate-500">
               No disputes match your filters.
             </p>
@@ -285,11 +274,25 @@ export default function DisputesPage() {
   );
 }
 
+export default function DisputesPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-white p-6 text-gray-900 sm:p-8 lg:p-10">
+          <p className="text-sm text-slate-500">Loading disputes…</p>
+        </main>
+      }
+    >
+      <DisputesPageInner />
+    </Suspense>
+  );
+}
+
 function formatCurrency(value: number): string {
   return value.toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
 
-function statusBadge(status: DisputeStatus): string {
+function statusBadge(status: string): string {
   if (status === "Resolved") {
     return "bg-emerald-100 text-emerald-800";
   }

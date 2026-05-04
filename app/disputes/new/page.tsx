@@ -1,10 +1,40 @@
 "use client";
 
+import type { DeductionRecord } from "@/app/lib/types";
+import { supabase } from "@/lib/supabaseClient";
 import { useRouter, useSearchParams } from "next/navigation";
-import { type ChangeEvent, useMemo, useState } from "react";
-import { deductionRows } from "../../lib/mock-data";
+import { Suspense, type ChangeEvent, useEffect, useMemo, useState } from "react";
 
-export default function NewDisputePage() {
+function mapDeductionRow(item: Record<string, unknown>): DeductionRecord {
+  return {
+    id: String(item.id ?? ""),
+    distributor: String(item.distributor ?? ""),
+    retailer: String(item.retailer ?? ""),
+    invoiceNumber: String(item.invoiceNumber ?? item.invoice_number ?? ""),
+    deductionCode: String(item.deductionCode ?? item.deduction_code ?? ""),
+    deductionType: String(item.deductionType ?? item.deduction_type ?? ""),
+    reason: String(item.reason ?? ""),
+    amount: Number(item.amount ?? 0),
+    date: String(item.date ?? ""),
+    flagged: Boolean(item.flagged ?? item.is_flagged ?? false),
+    disputeStatus: normalizeDisputeStatus(item.disputeStatus ?? item.dispute_status),
+  };
+}
+
+function normalizeDisputeStatus(value: unknown): DeductionRecord["disputeStatus"] {
+  if (
+    value === "New" ||
+    value === "Not Started" ||
+    value === "In Review" ||
+    value === "Submitted" ||
+    value === "Resolved"
+  ) {
+    return value;
+  }
+  return "Not Started";
+}
+
+function NewDisputePageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -13,10 +43,42 @@ export default function NewDisputePage() {
     return raw.split(",").filter(Boolean);
   }, [searchParams]);
 
-  const selectedDeductions = useMemo(
-    () => deductionRows.filter((row) => selectedIds.includes(row.id)),
-    [selectedIds],
-  );
+  const [selectedDeductions, setSelectedDeductions] = useState<DeductionRecord[]>([]);
+  const [selectionLoading, setSelectionLoading] = useState(false);
+  const [selectionError, setSelectionError] = useState(false);
+
+  useEffect(() => {
+    if (selectedIds.length === 0) {
+      setSelectedDeductions([]);
+      setSelectionError(false);
+      setSelectionLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setSelectionLoading(true);
+    setSelectionError(false);
+
+    void (async () => {
+      const { data, error } = await supabase.from("deductions").select("*").in("id", selectedIds);
+      if (cancelled) {
+        return;
+      }
+      setSelectionLoading(false);
+      if (error) {
+        setSelectedDeductions([]);
+        setSelectionError(true);
+        return;
+      }
+      setSelectedDeductions(
+        (data ?? []).map((row) => mapDeductionRow(row as Record<string, unknown>)),
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedIds]);
 
   const totalAmount = useMemo(
     () => selectedDeductions.reduce((sum, row) => sum + row.amount, 0),
@@ -100,42 +162,52 @@ export default function NewDisputePage() {
           <div className="border-b border-slate-200 px-4 py-3">
             <h2 className="text-sm font-semibold text-slate-800">Selected Deductions</h2>
           </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-              <thead className="bg-slate-100 text-xs uppercase tracking-wide text-slate-600">
-                <tr>
-                  <th className="px-4 py-3">distributor</th>
-                  <th className="px-4 py-3">retailer</th>
-                  <th className="px-4 py-3">invoice number</th>
-                  <th className="px-4 py-3">deduction code</th>
-                  <th className="px-4 py-3">deduction type</th>
-                  <th className="px-4 py-3">reason</th>
-                  <th className="px-4 py-3">amount</th>
-                  <th className="px-4 py-3">date</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {selectedDeductions.map((row) => (
-                  <tr key={row.id}>
-                    <td className="px-4 py-3">{row.distributor}</td>
-                    <td className="px-4 py-3">{row.retailer}</td>
-                    <td className="px-4 py-3">{row.invoiceNumber}</td>
-                    <td className="px-4 py-3">{row.deductionCode}</td>
-                    <td className="px-4 py-3">{row.deductionType}</td>
-                    <td className="px-4 py-3">{row.reason}</td>
-                    <td className="px-4 py-3">
-                      {row.amount.toLocaleString(undefined, {
-                        style: "currency",
-                        currency: "USD",
-                      })}
-                    </td>
-                    <td className="px-4 py-3">{row.date}</td>
+          {selectionLoading ? (
+            <p className="px-4 py-5 text-sm text-slate-500">Loading deductions…</p>
+          ) : null}
+          {selectionError ? (
+            <p className="border-t border-slate-200 px-4 py-5 text-sm text-red-600">
+              Error loading selected deductions from Supabase.
+            </p>
+          ) : null}
+          {!selectionLoading && !selectionError ? (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+                <thead className="bg-slate-100 text-xs uppercase tracking-wide text-slate-600">
+                  <tr>
+                    <th className="px-4 py-3">distributor</th>
+                    <th className="px-4 py-3">retailer</th>
+                    <th className="px-4 py-3">invoice number</th>
+                    <th className="px-4 py-3">deduction code</th>
+                    <th className="px-4 py-3">deduction type</th>
+                    <th className="px-4 py-3">reason</th>
+                    <th className="px-4 py-3">amount</th>
+                    <th className="px-4 py-3">date</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {selectedDeductions.length === 0 ? (
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {selectedDeductions.map((row) => (
+                    <tr key={row.id}>
+                      <td className="px-4 py-3">{row.distributor}</td>
+                      <td className="px-4 py-3">{row.retailer}</td>
+                      <td className="px-4 py-3">{row.invoiceNumber}</td>
+                      <td className="px-4 py-3">{row.deductionCode}</td>
+                      <td className="px-4 py-3">{row.deductionType}</td>
+                      <td className="px-4 py-3">{row.reason}</td>
+                      <td className="px-4 py-3">
+                        {row.amount.toLocaleString(undefined, {
+                          style: "currency",
+                          currency: "USD",
+                        })}
+                      </td>
+                      <td className="px-4 py-3">{row.date}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+          {selectedDeductions.length === 0 && !selectionLoading && !selectionError ? (
             <p className="border-t border-slate-200 px-4 py-5 text-sm text-slate-500">
               No deductions selected. Go to the Deductions page and choose rows first.
             </p>
@@ -215,5 +287,19 @@ export default function NewDisputePage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function NewDisputePage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-white px-6 py-8 text-gray-900 sm:px-8 lg:px-10">
+          <p className="text-sm text-slate-500">Loading dispute builder…</p>
+        </main>
+      }
+    >
+      <NewDisputePageInner />
+    </Suspense>
   );
 }

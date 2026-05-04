@@ -3,7 +3,7 @@
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import type { DeductionRecord } from "../lib/mock-data";
+import type { DeductionRecord } from "@/app/lib/types";
 
 function uniqueValues(rows: DeductionRecord[], key: keyof DeductionRecord): string[] {
   return Array.from(new Set(rows.map((row) => String(row[key])))).sort();
@@ -46,7 +46,7 @@ export default function DeductionsPage() {
         reason: String(item.reason ?? ""),
         amount: Number(item.amount ?? 0),
         date: String(item.date ?? ""),
-        flagged: Boolean(item.flagged ?? false),
+        flagged: Boolean(item.flagged ?? item.is_flagged ?? false),
         disputeStatus: normalizeDisputeStatus(item.disputeStatus ?? item.dispute_status),
       }));
 
@@ -242,7 +242,7 @@ export default function DeductionsPage() {
 
           {!loadingError && rows.length === 0 ? (
             <p className="border-t border-slate-200 px-4 py-6 text-sm text-slate-500">
-              No deductions yet
+              No deductions yet.
             </p>
           ) : null}
 
@@ -260,6 +260,7 @@ export default function DeductionsPage() {
 
 function normalizeDisputeStatus(value: unknown): DeductionRecord["disputeStatus"] {
   if (
+    value === "New" ||
     value === "Not Started" ||
     value === "In Review" ||
     value === "Submitted" ||
